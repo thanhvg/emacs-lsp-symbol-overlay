@@ -1,0 +1,76 @@
+#+STARTUP: indent
+* works the same way as symbol-overlay.el but takes symbol data from lsp
+the best way is to make change to upstream symbol-overlay but it seems hard to
+decouple the symbole getters. It is easier to start from scratch and copy some
+parts of symbol-overlay over.
+* namespace: lsp-sov
+* my work on lsp symbol occurence
+#+begin_src elisp
+(defun lsp-goto-symbol-occurence (&optional backward)
+  (unless (lsp--capability "documentHighlightProvider")
+    (signal 'lsp-capability-not-supported (list "documentHighlightProvider")))
+  (lsp--goto-symbol-occurent (point) backward))
+
+(defun lsp--goto-symbol-occurent (a-point backward)
+  (lsp-request-async "textDocument/documentHighlight"
+                     (lsp--text-document-position-params)
+                     (lsp--make-goto-symbol-occurence-callback a-point backward)))
+
+(defun lsp--make-goto-symbol-occurence-callback (a-point backward)
+  (lambda (highlights)
+    (when (> (length highlights) 1)
+      ;; map highlights to a point list
+      (let* ((my--points (-map (lambda (it)
+                                 (lsp--position-to-point (gethash "start" (gethash "range" it nil)))) highlights))
+             (points (-sort '< my--points))
+             (len (length my--points))
+             (goto--index (if backward (-find-last-index (lambda (it) (< it a-point)) points)
+                            (-find-index (lambda (it) (> it a-point)) points)))
+             (goto-index (if goto--index goto--index (if backward (- len 1) 0)))
+             (goto-point (nth goto-index points)))
+        (message "occurence %S/%S"  (+ goto-index 1) len)
+        (goto-char goto-point)))))
+
+(defun lsp-goto-symbol-occurence-forward ()
+  (interactive)
+  (lsp-goto-symbol-occurence))
+
+(defun lsp-goto-symbol-occurence-backward ()
+  (interactive)
+  (lsp-goto-symbol-occurence t))
+
+(spacemacs/set-leader-keys "oj" #'lsp-goto-symbol-occurence-forward)
+(spacemacs/set-leader-keys "ok" #'lsp-goto-symbol-occurence-backward)
+#+end_src
+
+* it is easy to get symbol list from lsp
+the problem to solve is how to manage them and update when changes come.
+this knowledge comes from symbol-overlay
+
+function symbol-overlay-put-all: find a free face and search symbol top down
+
+symbol-overlay-put-one put overlay and add 'symbol mark to it
+
+overlay-put ov 'evaporate t
+'symbol symbol
+
+how to deal with changes? with hooks
+
+(add-hook 'before-revert-hook 'symbol-overlay-remove-all)
+(add-hook 'after-revert-hook 'symbol-overlay-after-revert)
+
+how symbol-overlay watches for change? I made change to a symbol and then the
+highlight is gone but one I undo the change the highlight is back.
+
+(add-hook 'after-change-functions 'symbol-overlay-refresh)
+
+detect changes will be very difficult
++ we can add hooks to overlay on change within it and around it to update itself
+  this is ok.
++ also we can store a list of symbols were are highlighting but but different
+  symbols can have the same string value. How can we distinguish them?
++ but when user types a symbol that we should highlight. How can we do? This way
+  we must run an after chang hook which would be expensive and redundant since
+  lsp may run it also.
+
+
